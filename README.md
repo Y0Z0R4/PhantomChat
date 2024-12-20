@@ -4,5 +4,7 @@ Welcome to PhantomChat, the reasonably private, privacy-focused messaging app de
 
 🌟 Key Features 🌟
 E2EE: No one can see the messages! Even us!
+
 Self-Destructing Messages: Set timers for messages to automatically delete after they've been read.
+
 Anonymous Chatting: No need to provide personal information. Chat anonymously with unique aliases.
