@@ -5,15 +5,12 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="d57f787e-f5f6-403a-87aa-1707a214d748" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/.gitignore" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/AES256Util.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/AESHelper.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/ChatClient.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/ChatServer.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/DiffieHellman.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/Main.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/AES256Util.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/AESHelper.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/ChatClient.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/ChatClient.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/ChatServer.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/ChatServer.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/DiffieHellman.java" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

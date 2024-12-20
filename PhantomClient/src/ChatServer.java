@@ -1,50 +1,77 @@
-import javax.crypto.*;
-import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 import java.io.*;
 import java.net.*;
-import java.security.*;
-import java.math.BigInteger;
-import java.util.Arrays;
-import java.util.Base64;
+import java.util.*;
 import java.util.concurrent.*;
 
 public class ChatServer {
     private static final int SERVER_PORT = 12345;
-    private static final ExecutorService clientHandlers = Executors.newCachedThreadPool();  // Handles multiple clients
-    private static final String EXIT_COMMAND = "/exit";  // Command to gracefully shutdown server
+    private static final Map<String, PrintWriter> clientWriters = new ConcurrentHashMap<>();
+    private static final Set<String> usernames = new HashSet<>();
+    private static final Map<String, String> users = new HashMap<>();
+    private static final Map<String, Set<String>> activeDMs = new HashMap<>();
+    private static final String USERS_FILE = "users.txt";
 
     public static void main(String[] args) {
-        System.out.println("Server starting...");
+        System.out.println("Chat server started...");
+        createUsersFileIfNotExist();
+        loadUsers();
 
         try (ServerSocket serverSocket = new ServerSocket(SERVER_PORT)) {
-            System.out.println("Server started on port " + SERVER_PORT);
-
-            // Accept and handle clients
             while (true) {
-                try {
-                    Socket clientSocket = serverSocket.accept();
-                    System.out.println("Client connected: " + clientSocket.getRemoteSocketAddress());
-                    // Spawn a new thread for handling the client connection
-                    clientHandlers.submit(new ClientHandler(clientSocket));
-                } catch (IOException e) {
-                    System.err.println("Error accepting client connection: " + e.getMessage());
-                    e.printStackTrace();
-                }
+                Socket clientSocket = serverSocket.accept();
+                System.out.println("New client connected: " + clientSocket.getInetAddress().getHostAddress());
+                new ClientHandler(clientSocket).start();
             }
         } catch (IOException e) {
-            System.err.println("Server error: " + e.getMessage());
-            e.printStackTrace();
+            System.err.println("Error starting server: " + e.getMessage());
         }
     }
 
-    // This class handles communication with a single client
-    private static class ClientHandler implements Runnable {
+    private static void createUsersFileIfNotExist() {
+        File usersFile = new File(USERS_FILE);
+        if (!usersFile.exists()) {
+            try {
+                if (usersFile.createNewFile()) {
+                    System.out.println("users.txt file created.");
+                }
+            } catch (IOException e) {
+                System.err.println("Error creating users.txt file: " + e.getMessage());
+            }
+        }
+    }
+
+    private static void loadUsers() {
+        try (BufferedReader reader = new BufferedReader(new FileReader(USERS_FILE))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String[] parts = line.split(":");
+                if (parts.length == 2) {
+                    String username = parts[0].trim();
+                    String password = parts[1].trim();
+                    users.put(username, password);
+                    usernames.add(username);
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("Error loading user data: " + e.getMessage());
+        }
+    }
+
+    private static void saveUsers() {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(USERS_FILE))) {
+            for (Map.Entry<String, String> entry : users.entrySet()) {
+                writer.write(entry.getKey() + ":" + entry.getValue());
+                writer.newLine();
+            }
+        } catch (IOException e) {
+            System.err.println("Error saving user data: " + e.getMessage());
+        }
+    }
+
+    private static class ClientHandler extends Thread {
         private final Socket clientSocket;
         private BufferedReader in;
         private PrintWriter out;
-        private DiffieHellman dh;
-        private SecretKey sharedKey;
         private String username;
 
         public ClientHandler(Socket clientSocket) {
@@ -54,120 +81,140 @@ public class ChatServer {
         @Override
         public void run() {
             try {
-                // Initialize the input and output streams
                 in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
                 out = new PrintWriter(clientSocket.getOutputStream(), true);
 
-                // Step 1: Read username
-                out.println("Enter your username: ");
-                username = in.readLine();
-                if (username == null || username.trim().isEmpty()) {
-                    out.println("Invalid username. Disconnecting...");
-                    clientSocket.close();
+                out.println("Do you want to register? (yes/no)");
+                String response = in.readLine().trim().toLowerCase();
+                if ("yes".equals(response)) {
+                    registerUser();
+                } else {
+                    loginUser();
+                }
+
+                String message;
+                while ((message = in.readLine()) != null) {
+                    if (message.equalsIgnoreCase("/exit")) {
+                        break;
+                    } else if (message.startsWith("/dm ")) {
+                        String[] parts = message.split(" ", 3);
+                        if (parts.length < 3) {
+                            out.println("Usage: /dm <username> <message>");
+                        } else {
+                            String targetUser = parts[1];
+                            String dmMessage = parts[2];
+                            sendDirectMessage(targetUser, dmMessage);
+                        }
+                    } else if (message.startsWith("/close ")) {
+                        String[] parts = message.split(" ", 2);
+                        if (parts.length < 2) {
+                            out.println("Usage: /close <username>");
+                        } else {
+                            closeDM(parts[1]);
+                        }
+                    } else {
+                        broadcast(username + ": " + message);
+                    }
+                }
+
+                synchronized (clientWriters) {
+                    clientWriters.remove(username);
+                }
+                synchronized (usernames) {
+                    usernames.remove(username);
+                }
+                broadcast(username + " has left the chat.");
+
+            } catch (IOException e) {
+                System.err.println("Error handling client: " + e.getMessage());
+            } finally {
+                try {
+                    if (in != null) {
+                        in.close();
+                    }
+                    if (out != null) {
+                        out.close();
+                    }
+                    if (clientSocket != null) {
+                        clientSocket.close();
+                    }
+                } catch (IOException e) {
+                    System.err.println("Error closing resources: " + e.getMessage());
+                }
+            }
+        }
+
+        private void registerUser() throws IOException {
+            out.println("Enter your desired username: ");
+            String username = in.readLine().trim();
+
+            synchronized (usernames) {
+                if (usernames.contains(username)) {
+                    out.println("Username is already taken. Try another one.");
                     return;
                 }
+                usernames.add(username);
+            }
 
-                System.out.println("Username: " + username);
+            out.println("Enter your password: ");
+            String password = in.readLine().trim();
 
-                // Step 2: Initialize Diffie-Hellman key exchange
-                dh = new DiffieHellman();
-                BigInteger clientPublicKey = new BigInteger(in.readLine(), 16);
-                System.out.println("Received client's public key: " + clientPublicKey.toString(16));
+            synchronized (users) {
+                users.put(username, password);
+            }
 
-                // Generate and send the server's public key
-                BigInteger serverPublicKey = dh.getPublicKey();
-                out.println(serverPublicKey.toString(16));
+            saveUsers();
+            out.println("Registration successful. You can now log in.");
+        }
 
-                // Generate the shared secret
-                BigInteger sharedSecret = dh.generateSharedSecret(clientPublicKey);
-                byte[] sharedSecretBytes = sharedSecret.toByteArray();
-                MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
-                byte[] hashedKey = sha256.digest(sharedSecretBytes);
-                sharedKey = new SecretKeySpec(hashedKey, 0, 32, "AES");
+        private void loginUser() throws IOException {
+            out.println("Enter your username: ");
+            String enteredUsername = in.readLine().trim();
 
-                // Key exchange successful
-                out.println("Key exchange successful. Shared key established.");
+            out.println("Enter your password: ");
+            String enteredPassword = in.readLine().trim();
 
-                // Step 3: Handle commands and messages
-                handleClientCommands();
+            if (users.containsKey(enteredUsername) && users.get(enteredUsername).equals(enteredPassword)) {
+                username = enteredUsername;
+            } else {
+                out.println("Invalid username or password. Disconnecting...");
+                clientSocket.close();
+                return;
+            }
 
-            } catch (IOException | GeneralSecurityException e) {
-                System.err.println("Error handling client: " + e.getMessage());
-                e.printStackTrace();
-            } finally {
-                closeResources();
+            synchronized (clientWriters) {
+                clientWriters.put(username, out);
+            }
+            out.println("You are logged in as " + username);
+            broadcast(username + " has joined the chat.");
+        }
+
+        private void broadcast(String message) {
+            synchronized (clientWriters) {
+                for (PrintWriter writer : clientWriters.values()) {
+                    writer.println(message);
+                }
             }
         }
 
-        // Handle client commands and messages
-        private void handleClientCommands() {
-            try {
-                String command;
-                while ((command = in.readLine()) != null) {
-                    if (command.equalsIgnoreCase(EXIT_COMMAND)) {
-                        out.println("Goodbye " + username + "!");
-                        break;
-                    }
-                    // Handle the message with encryption and decryption
-                    String decryptedMessage = decryptMessage(command);
-                    System.out.println("Received from " + username + ": " + decryptedMessage);
-                    out.println("Message received: " + decryptedMessage);
-                }
-            } catch (IOException e) {
-                System.err.println("Error reading message from " + username + ": " + e.getMessage());
-                e.printStackTrace();
-            } catch (GeneralSecurityException e) {
-                throw new RuntimeException(e);
+        private void sendDirectMessage(String targetUser, String message) {
+            PrintWriter targetWriter = clientWriters.get(targetUser);
+            if (targetWriter != null) {
+                targetWriter.println("[DM from " + username + "]: " + message);
+                activeDMs.computeIfAbsent(username, k -> new HashSet<>()).add(targetUser);
+                activeDMs.computeIfAbsent(targetUser, k -> new HashSet<>()).add(username);
+            } else {
+                out.println("User " + targetUser + " is not online.");
             }
         }
 
-        // Encrypt the message using AES
-        private String encryptMessage(String message) throws GeneralSecurityException {
-            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-            byte[] iv = new byte[16];
-            new SecureRandom().nextBytes(iv);
-            IvParameterSpec ivSpec = new IvParameterSpec(iv);
-
-            cipher.init(Cipher.ENCRYPT_MODE, sharedKey, ivSpec);
-            byte[] encryptedData = cipher.doFinal(message.getBytes());
-
-            // Combine IV and encrypted data
-            byte[] result = new byte[iv.length + encryptedData.length];
-            System.arraycopy(iv, 0, result, 0, iv.length);
-            System.arraycopy(encryptedData, 0, result, iv.length, encryptedData.length);
-
-            return Base64.getEncoder().encodeToString(result);
-        }
-
-        // Decrypt the message using AES
-        private String decryptMessage(String encryptedMessage) throws GeneralSecurityException {
-            byte[] data = Base64.getDecoder().decode(encryptedMessage);
-            byte[] iv = Arrays.copyOfRange(data, 0, 16);
-            byte[] encryptedData = Arrays.copyOfRange(data, 16, data.length);
-
-            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-            IvParameterSpec ivSpec = new IvParameterSpec(iv);
-            cipher.init(Cipher.DECRYPT_MODE, sharedKey, ivSpec);
-
-            byte[] decryptedData = cipher.doFinal(encryptedData);
-            return new String(decryptedData);
-        }
-
-        // Close resources
-        private void closeResources() {
-            try {
-                if (in != null) {
-                    in.close();
-                }
-                if (out != null) {
-                    out.close();
-                }
-                if (clientSocket != null) {
-                    clientSocket.close();
-                }
-            } catch (IOException e) {
-                System.err.println("Error closing resources: " + e.getMessage());
-                e.printStackTrace();
+        private void closeDM(String targetUser) {
+            if (activeDMs.containsKey(username) && activeDMs.get(username).contains(targetUser)) {
+                activeDMs.get(username).remove(targetUser);
+                activeDMs.get(targetUser).remove(username);
+                out.println("Closed DM with " + targetUser);
+            } else {
+                out.println("No active DM session with " + targetUser);
             }
         }
     }
