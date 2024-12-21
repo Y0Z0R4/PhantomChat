@@ -8,11 +8,11 @@ public class ChatServer {
     private static final Map<String, PrintWriter> clientWriters = new ConcurrentHashMap<>();
     private static final Set<String> usernames = new HashSet<>();
     private static final Map<String, String> users = new HashMap<>();
-    private static final Map<String, Set<String>> activeDMs = new HashMap<>();
     private static final String USERS_FILE = "users.txt";
 
     public static void main(String[] args) {
         System.out.println("Chat server started...");
+
         createUsersFileIfNotExist();
         loadUsers();
 
@@ -84,34 +84,29 @@ public class ChatServer {
                 in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
                 out = new PrintWriter(clientSocket.getOutputStream(), true);
 
-                out.println("Do you want to register? (yes/no)");
-                String response = in.readLine().trim().toLowerCase();
-                if ("yes".equals(response)) {
-                    registerUser();
+                // Handle login and registration
+                String enteredUsername = in.readLine().trim();
+                String enteredPassword = in.readLine().trim();
+
+                if (users.containsKey(enteredUsername) && users.get(enteredUsername).equals(enteredPassword)) {
+                    username = enteredUsername;
+                    out.println("Login successful!");
                 } else {
-                    loginUser();
+                    out.println("Invalid username or password. Registering your account...");
+                    handleUserRegistration(enteredUsername, enteredPassword);
+                    username = enteredUsername;
+                    out.println("Registration successful! You are now logged in.");
                 }
+
+                synchronized (clientWriters) {
+                    clientWriters.put(username, out);
+                }
+                broadcast(username + " has joined the chat.");
 
                 String message;
                 while ((message = in.readLine()) != null) {
                     if (message.equalsIgnoreCase("/exit")) {
                         break;
-                    } else if (message.startsWith("/dm ")) {
-                        String[] parts = message.split(" ", 3);
-                        if (parts.length < 3) {
-                            out.println("Usage: /dm <username> <message>");
-                        } else {
-                            String targetUser = parts[1];
-                            String dmMessage = parts[2];
-                            sendDirectMessage(targetUser, dmMessage);
-                        }
-                    } else if (message.startsWith("/close ")) {
-                        String[] parts = message.split(" ", 2);
-                        if (parts.length < 2) {
-                            out.println("Usage: /close <username>");
-                        } else {
-                            closeDM(parts[1]);
-                        }
                     } else {
                         broadcast(username + ": " + message);
                     }
@@ -129,64 +124,20 @@ public class ChatServer {
                 System.err.println("Error handling client: " + e.getMessage());
             } finally {
                 try {
-                    if (in != null) {
-                        in.close();
-                    }
-                    if (out != null) {
-                        out.close();
-                    }
-                    if (clientSocket != null) {
-                        clientSocket.close();
-                    }
+                    if (in != null) in.close();
+                    if (out != null) out.close();
+                    if (clientSocket != null) clientSocket.close();
                 } catch (IOException e) {
                     System.err.println("Error closing resources: " + e.getMessage());
                 }
             }
         }
 
-        private void registerUser() throws IOException {
-            out.println("Enter your desired username: ");
-            String username = in.readLine().trim();
-
-            synchronized (usernames) {
-                if (usernames.contains(username)) {
-                    out.println("Username is already taken. Try another one.");
-                    return;
-                }
-                usernames.add(username);
-            }
-
-            out.println("Enter your password: ");
-            String password = in.readLine().trim();
-
+        private void handleUserRegistration(String username, String password) {
             synchronized (users) {
                 users.put(username, password);
             }
-
             saveUsers();
-            out.println("Registration successful. You can now log in.");
-        }
-
-        private void loginUser() throws IOException {
-            out.println("Enter your username: ");
-            String enteredUsername = in.readLine().trim();
-
-            out.println("Enter your password: ");
-            String enteredPassword = in.readLine().trim();
-
-            if (users.containsKey(enteredUsername) && users.get(enteredUsername).equals(enteredPassword)) {
-                username = enteredUsername;
-            } else {
-                out.println("Invalid username or password. Disconnecting...");
-                clientSocket.close();
-                return;
-            }
-
-            synchronized (clientWriters) {
-                clientWriters.put(username, out);
-            }
-            out.println("You are logged in as " + username);
-            broadcast(username + " has joined the chat.");
         }
 
         private void broadcast(String message) {
@@ -194,27 +145,6 @@ public class ChatServer {
                 for (PrintWriter writer : clientWriters.values()) {
                     writer.println(message);
                 }
-            }
-        }
-
-        private void sendDirectMessage(String targetUser, String message) {
-            PrintWriter targetWriter = clientWriters.get(targetUser);
-            if (targetWriter != null) {
-                targetWriter.println("[DM from " + username + "]: " + message);
-                activeDMs.computeIfAbsent(username, k -> new HashSet<>()).add(targetUser);
-                activeDMs.computeIfAbsent(targetUser, k -> new HashSet<>()).add(username);
-            } else {
-                out.println("User " + targetUser + " is not online.");
-            }
-        }
-
-        private void closeDM(String targetUser) {
-            if (activeDMs.containsKey(username) && activeDMs.get(username).contains(targetUser)) {
-                activeDMs.get(username).remove(targetUser);
-                activeDMs.get(targetUser).remove(username);
-                out.println("Closed DM with " + targetUser);
-            } else {
-                out.println("No active DM session with " + targetUser);
             }
         }
     }
